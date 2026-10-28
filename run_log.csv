@@ -1,2 +1,0 @@
-strategy,trial_family,trial_id,git_commit,data_snapshot,eval_window,metrics,decision,gate
-etf_mom_vol,baseline,001,,v1_initial,,,
