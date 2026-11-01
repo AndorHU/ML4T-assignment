@@ -3,23 +3,23 @@ import numpy as np
 import matplotlib.pyplot as plt
 import warnings
 
-# Figyelmeztetések elnémítása
+# Suppressing warnings
 warnings.filterwarnings('ignore')
 
-# 1. Adatok betöltése
-print("Adatok betöltése...")
+# 1. Loading data
+print("Loading data...")
 try:
     df = pd.read_parquet("ml_features_dataset.parquet")
 except:
     df = pd.read_csv("market_data.csv", index_col="Date", parse_dates=True)
 
-# Holdout szűrés (2006-2021 közötti tréning/validációs időszak)
+# Holdout filtering (2006-2021 training/validation period)
 train_val_mask = df.index < '2022-01-01'
 df_train = df[train_val_mask].copy()
 
-print(f"Tréning adatok száma: {len(df_train)} sor")
+print(f"Number of training data rows: {len(df_train)}")
 
-# 2. Küszöbértékek beállítása (80% Rebalance, 87.5% Teljes Kilépés, 70% Visszalépés)
+# 2. Setting thresholds (80% Rebalance, 87.5% Full Exit, 70% Re-entry)
 spy_reb_thresh = df_train['SPY_Vol_20'].quantile(0.80)
 spy_exit_thresh = df_train['SPY_Vol_20'].quantile(0.875)
 spy_reentry_thresh = df_train['SPY_Vol_20'].quantile(0.70)
@@ -29,15 +29,15 @@ gld_exit_thresh = df_train['GLD_Vol_20'].quantile(0.875)
 gld_reentry_thresh = df_train['GLD_Vol_20'].quantile(0.70)
 
 print(
-    f"SPY Küszöbök -> Rebalance (80%): {spy_reb_thresh:.4f} | Kilépés (87.5%): {spy_exit_thresh:.4f} | Visszalépés (70%): {spy_reentry_thresh:.4f}")
+    f"SPY Thresholds -> Rebalance (80%): {spy_reb_thresh:.4f} | Exit (87.5%): {spy_exit_thresh:.4f} | Re-entry (70%): {spy_reentry_thresh:.4f}")
 print(
-    f"GLD Küszöbök -> Rebalance (80%): {gld_reb_thresh:.4f} | Kilépés (87.5%): {gld_exit_thresh:.4f} | Visszalépés (70%): {gld_reentry_thresh:.4f}")
+    f"GLD Thresholds -> Rebalance (80%): {gld_reb_thresh:.4f} | Exit (87.5%): {gld_exit_thresh:.4f} | Re-entry (70%): {gld_reentry_thresh:.4f}")
 
-# Előre eltolott volatilitások a lookahead bias elkerülésére
+# Shifted volatilities to avoid lookahead bias
 prev_spy_vol = df_train['SPY_Vol_20'].shift(1)
 prev_gld_vol = df_train['GLD_Vol_20'].shift(1)
 
-# 3. Napi szimulációs ciklus a Sleeve-alapú dinamikus kezeléshez
+# 3. Daily simulation loop for Sleeve-based dynamic management
 dates = df_train.index
 spy_returns = df_train['SPY_Return'].values
 gld_returns = df_train['GLD_Return'].values
@@ -61,38 +61,38 @@ for i in range(len(dates)):
     s_vol = prev_spy_vol.iloc[i]
     g_vol = prev_gld_vol.iloc[i]
 
-    # --- SPY Állapotgép (Exit 87.5%-nál, Re-entry 70%-nál) ---
+    # --- SPY State Machine (Exit at 87.5%, Re-entry at 70%) ---
     old_spy_state = spy_state
     if spy_state == 1:
         if not pd.isna(s_vol) and s_vol > spy_exit_thresh:
-            spy_state = 0  # Teljes kilépés SHY-ba
+            spy_state = 0  # Full exit into SHY
     else:
         if not pd.isna(s_vol) and s_vol < spy_reentry_thresh:
-            spy_state = 1  # Visszalépés SPY-ba
+            spy_state = 1  # Re-entry into SPY
 
     # --- GLD Állapotgép (Exit 87.5%-nál, Re-entry 70%-nál) ---
     old_gld_state = gld_state
     if gld_state == 1:
         if not pd.isna(g_vol) and g_vol > gld_exit_thresh:
-            gld_state = 0  # Teljes kilépés SHY-ba
+            gld_state = 0  # Full exit into SHY
     else:
         if not pd.isna(g_vol) and g_vol < gld_reentry_thresh:
-            gld_state = 1  # Visszalépés GLD-be
+            gld_state = 1  # Re-entry into GLD
 
-    # Tranzakciós költség az állapotváltások miatt
+    # Transaction cost due to state changes
     if spy_state != old_spy_state:
         spy_capital *= (1.0 - cost_per_trade)
     if gld_state != old_gld_state:
         gld_capital *= (1.0 - cost_per_trade)
 
-    # --- Napi hozamok alkalmazása a sleeve-ek tőkéjére ---
+    # --- Applying daily returns to sleeve capital ---
     s_ret = spy_returns[i] if spy_state == 1 else shy_returns[i]
     g_ret = gld_returns[i] if gld_state == 1 else shy_returns[i]
 
     spy_capital *= (1.0 + s_ret)
     gld_capital *= (1.0 + g_ret)
 
-    # --- 80% Rebalance szabály (Profit levétele és 50-50%-ra igazítás) ---
+    # --- 80% Rebalance rule (Taking profits and adjusting to 50-50%) ---
     rebalance_triggered = False
     if not pd.isna(s_vol) and s_vol > spy_reb_thresh:
         rebalance_triggered = True
@@ -103,19 +103,19 @@ for i in range(len(dates)):
         total_portfolio = spy_capital + gld_capital
         old_spy_cap = spy_capital
 
-        # Újraosztás 50-50%-ra
+        # Rebalancing to 50-50%
         spy_capital = total_portfolio * 0.5
         gld_capital = total_portfolio * 0.5
 
-        # Tranzakciós költség a tőke átrendezésére (forgalom alapján)
+        # Transaction cost for capital reallocation (based on turnover)
         moved_amount = abs(spy_capital - old_spy_cap)
         total_portfolio -= moved_amount * cost_per_trade
 
-        # Költséggel csökkentett újrasúlyozás
+        # Cost-adjusted rebalancing
         spy_capital = total_portfolio * 0.5
         gld_capital = total_portfolio * 0.5
 
-    # Teljes portfólió érték mentése
+    # Saving total portfolio value
     total_val = spy_capital + gld_capital
     strategy_values.append(total_val)
 
@@ -123,7 +123,7 @@ df_train['Strategy_Cumulative'] = strategy_values
 df_train['SPY_BuyAndHold'] = (1 + df_train['SPY_Return']).cumprod()
 df_train['GLD_BuyAndHold'] = (1 + df_train['GLD_Return']).cumprod()
 
-# 4. Végeredmények és Kockázati Metrikák
+# 4. Final Results and Risk Metrics
 final_strategy = df_train['Strategy_Cumulative'].iloc[-1]
 final_spy = df_train['SPY_BuyAndHold'].iloc[-1]
 final_gld = df_train['GLD_BuyAndHold'].iloc[-1]
@@ -132,23 +132,23 @@ rolling_max = df_train['Strategy_Cumulative'].cummax()
 drawdown = df_train['Strategy_Cumulative'] / rolling_max - 1.0
 max_drawdown = drawdown.min()
 
-print(f"\n--- DYNAMIC REBALANCE BACKTEST EREDMÉNYEK (2006 - 2021) ---")
-print(f"Kezdeti tőke: $1.00")
-print(f"Stratégia végső értéke (Nettó, 5 bps): ${final_strategy:.2f}")
-print(f"S&P 500 (Buy & Hold) végső értéke: ${final_spy:.2f}")
-print(f"GLD (Buy & Hold) végső értéke: ${final_gld:.2f}")
-print(f"Stratégia maximális visszaesése (Max Drawdown): {max_drawdown * 100:.2f}%")
+print(f"\n--- DYNAMIC REBALANCE BACKTEST RESULTS (2006 - 2021) ---")
+print(f"Initial capital: $1.00")
+print(f"Strategy final value (Net, 5 bps): ${final_strategy:.2f}")
+print(f"S&P 500 (Buy & Hold) final value: ${final_spy:.2f}")
+print(f"GLD (Buy & Hold) final value: ${final_gld:.2f}")
+print(f"Strategy Max Drawdown: {max_drawdown * 100:.2f}%")
 
-# 5. Grafikon rajzolása
+# 5. Plotting the chart
 plt.figure(figsize=(12, 6))
-plt.plot(df_train.index, df_train['Strategy_Cumulative'], label='Dinamikus Rebalance Stratégia (80/87.5/70)',
+plt.plot(df_train.index, df_train['Strategy_Cumulative'], label='Dynamic Rebalance Strategy (80/87.5/70)',
          color='darkviolet')
 plt.plot(df_train.index, df_train['SPY_BuyAndHold'], label='S&P 500 (Buy & Hold)', color='gray', alpha=0.7)
 plt.plot(df_train.index, df_train['GLD_BuyAndHold'], label='GLD (Buy & Hold)', color='goldenrod', alpha=0.8)
 
-plt.title('Dinamikus Rebalance & Kilépési Küszöbök (Rebal: 80%, Exit: 87.5%, Re-entry: 70%)')
-plt.ylabel('Kumulált Hozam (Kezdőérték = 1.0)')
-plt.xlabel('Dátum')
+plt.title('Dynamic Rebalance & Exit Threshold (Rebal: 80%, Exit: 87.5%, Re-entry: 70%)')
+plt.ylabel('Cumulative Return (Initial value = 1.0)')
+plt.xlabel('Date')
 plt.legend()
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
