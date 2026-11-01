@@ -1,0 +1,43 @@
+setup_version: "v2"
+
+assets:
+  risky: ["SPY", "GLD"]
+  parking: "SHY"
+
+data:
+  start: "2006-01-01"
+  end_exclusive: "2024-01-01"
+
+split:
+  holdout_start: "2022-01-01"
+  holdout_end_exclusive: "2024-01-01"
+
+allocation:
+  spy_sleeve: 0.50
+  gld_sleeve: 0.50
+  long_only: true
+  leverage: false
+
+execution:
+  signal_time: "close"
+  execution_time: "next_open"
+  rebalance: "daily"
+  fractional_shares: true
+
+baseline:
+  volatility_window: 20
+  exit_quantile: 0.80
+  reentry_quantile: 0.70
+  initial_state: "SHY"
+
+costs:
+  per_traded_notional: 0.0005
+  charge_initial_entry: true
+
+validation:
+  method: "expanding_walk_forward"
+  min_train_years: 5
+  validation_years: 1
+  step_years: 1
+  gap_trading_days: 21
+  label_horizon_trading_days: 21
