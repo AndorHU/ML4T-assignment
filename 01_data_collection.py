@@ -2,6 +2,8 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
+import warnings
+warnings.filterwarnings("ignore")
 # 1. Data Downloading
 tickers = ["SPY", "GLD", "SHY"]
 start_date = "2005-01-01"
