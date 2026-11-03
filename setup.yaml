@@ -26,7 +26,8 @@ execution:
 
 baseline:
   volatility_window: 20
-  exit_quantile: 0.80
+  exit_quantile: 0.875
+  profit_exit_quantile: 0.80
   reentry_quantile: 0.70
   initial_state: "SHY"
 

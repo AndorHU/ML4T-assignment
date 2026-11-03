@@ -4,9 +4,47 @@ import matplotlib.pyplot as plt
 import lightgbm as lgb
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import TimeSeriesSplit
+import statsmodels.api as sm
+from scipy.stats import rankdata
 import warnings
 
 warnings.filterwarnings('ignore')
+
+
+def compute_ic_newey_west(pred, target, max_lags=21):
+    """
+    Spearman IC és a hozzá tartozó Newey-West (HAC) 95%-os konfidenciaintervallum
+    kiszámítása OLS regresszió segítségével rangsorolt adatokon.
+    """
+    df_temp = pd.DataFrame({'pred': pred, 'target': target}).dropna()
+
+    if len(df_temp) < max_lags:
+        return np.nan, np.nan, np.nan, np.nan
+
+    # 1. Rangsorolás (Spearman alap)
+    r_pred = rankdata(df_temp['pred'])
+    r_target = rankdata(df_temp['target'])
+
+    # 2. Standardizálás (Z-score)
+    r_pred_std = (r_pred - np.mean(r_pred)) / np.std(r_pred)
+    r_target_std = (r_target - np.mean(r_target)) / np.std(r_target)
+
+    # 3. OLS regresszió konstanssal: Y_rank = alpha + beta * X_rank
+    X = sm.add_constant(r_pred_std)
+    ols_model = sm.OLS(r_target_std, X)
+
+    # 4. Illesztés Newey-West (HAC) standard hibákkal (maxlags = label horizon)
+    results = ols_model.fit(cov_type='HAC', cov_kwds={'maxlags': max_lags})
+
+    ic = results.params[1]  # Béta meredekség = Spearman IC
+    se = results.bse[1]     # Newey-West Standard Error
+
+    ci_lower = ic - 1.96 * se
+    ci_upper = ic + 1.96 * se
+    p_value = results.pvalues[1]
+
+    return ic, ci_lower, ci_upper, p_value
+
 
 # 1. Loading Data and Holdout Split (Pre-2022 training/validation data)
 df = pd.read_parquet("ml_features_dataset.parquet")
@@ -55,15 +93,22 @@ for train_index, test_index in tscv.split(df_train):
     df_train.iloc[test_index, df_train.columns.get_loc('LGBM_SPY_Pred')] = lgb_spy.predict(X_test_spy)
     df_train.iloc[test_index, df_train.columns.get_loc('LGBM_GLD_Pred')] = lgb_gld.predict(X_test_gld)
 
-    # Information Coefficient (IC) Calculation
-    ic_spy = pd.Series(lgb_spy.predict(X_test_spy)).corr(test_df['SPY_Target_Label'].reset_index(drop=True),
-                                                         method='spearman')
-    ic_gld = pd.Series(lgb_gld.predict(X_test_gld)).corr(test_df['GLD_Target_Label'].reset_index(drop=True),
-                                                         method='spearman')
-    print(f"Fold {fold} | Teszt méret: {len(test_df)} nap | SPY IC: {ic_spy:.4f} | GLD IC: {ic_gld:.4f}")
+    print(f"Fold {fold} processed ({len(test_df)} days).")
     fold += 1
 
 df_backtest = df_train.dropna(subset=['LGBM_SPY_Pred', 'LGBM_GLD_Pred']).copy()
+
+# OVERALL TIME-SERIES IC CALCULATION WITH NEWEY-WEST 95% CI (LightGBM)
+ic_spy, spy_ci_lower, spy_ci_upper, spy_p = compute_ic_newey_west(
+    df_backtest['LGBM_SPY_Pred'], df_backtest['SPY_Target_Label'], max_lags=21
+)
+ic_gld, gld_ci_lower, gld_ci_upper, gld_p = compute_ic_newey_west(
+    df_backtest['LGBM_GLD_Pred'], df_backtest['GLD_Target_Label'], max_lags=21
+)
+
+print(f"\n--- TIME-SERIES IC WITH NEWEY-WEST 95% CONFIDENCE INTERVALS (LightGBM) ---")
+print(f"SPY IC: {ic_spy:.4f} | 95% CI: [{spy_ci_lower:.4f}, {spy_ci_upper:.4f}] | p-value: {spy_p:.4f}")
+print(f"GLD IC: {ic_gld:.4f} | 95% CI: [{gld_ci_lower:.4f}, {gld_ci_upper:.4f}] | p-value: {gld_p:.4f}")
 
 # 4. Two 50% Sleeve Portfolio Logic
 prev_spy_pred = df_backtest['LGBM_SPY_Pred'].shift(1)

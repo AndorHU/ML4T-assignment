@@ -84,8 +84,10 @@ for i in range(len(dates)):
     # Transaction costs for state transitions
     if spy_state != old_spy_state:
         spy_capital *= (1.0 - cost_per_trade)
+
     if gld_state != old_gld_state:
         gld_capital *= (1.0 - cost_per_trade)
+
 
     # Applying daily returns
     s_ret = spy_returns[i] if spy_state == 1 else shy_returns[i]
@@ -130,16 +132,47 @@ final_strategy = df_holdout['Strategy_Cumulative'].iloc[-1]
 final_spy = df_holdout['SPY_BuyAndHold'].iloc[-1]
 final_gld = df_holdout['GLD_BuyAndHold'].iloc[-1]
 
+# Napi hozamok kiszámítása a metrikákhoz
+df_holdout['Strategy_Daily_Return'] = df_holdout['Strategy_Cumulative'].pct_change()
+strat_returns = df_holdout['Strategy_Daily_Return'].dropna()
+spy_returns_clean = df_holdout['SPY_Return'].loc[strat_returns.index]
+
+# --- Hagyományos Drawdown (Mélység) ---
 rolling_max = df_holdout['Strategy_Cumulative'].cummax()
 drawdown = df_holdout['Strategy_Cumulative'] / rolling_max - 1.0
 max_drawdown = drawdown.min()
+
+# --- Drawdown Duration (Hossz) ---
+# Kiszámoljuk, hány napig volt a stratégia a korábbi csúcs alatt
+is_drawdown = drawdown < 0
+dd_groups = (~is_drawdown).cumsum()
+dd_durations = is_drawdown.groupby(dd_groups).sum()
+max_dd_duration = dd_durations.max()
+
+# --- 95% VaR és CVaR ---
+# VaR: A legrosszabb 5% napok küszöbe
+var_95 = np.percentile(strat_returns, 5)
+# CVaR: A legrosszabb 5% napok átlagos vesztesége (Várható veszteség a farokban)
+cvar_95 = strat_returns[strat_returns <= var_95].mean()
+
+# --- Béta (SPY-hoz képest) ---
+covariance = np.cov(strat_returns, spy_returns_clean)[0][1]
+variance = np.var(spy_returns_clean)
+overall_beta = covariance / variance if variance > 0 else 0
+
+# Gördülő 60 napos béta a vizualizációhoz vagy későbbi elemzéshez
+df_holdout['Rolling_Beta'] = df_holdout['Strategy_Daily_Return'].rolling(60).cov(df_holdout['SPY_Return']) / df_holdout['SPY_Return'].rolling(60).var()
 
 print(f"\n--- LOCKED HOLDOUT RESULTS (2022 - 2024) ---")
 print(f"Initial capital at the start of holdout: $1.00")
 print(f"Strategy final value: ${final_strategy:.2f}")
 print(f"S&P 500 (Buy & Hold) final value: ${final_spy:.2f}")
 print(f"GLD (Buy & Hold) final value: ${final_gld:.2f}")
-print(f"Holdout Max Drawdown (Stress Test): {max_drawdown * 100:.2f}%")
+print(f"Holdout Max Drawdown (Mélység): {max_drawdown * 100:.2f}%")
+print(f"Holdout Max Drawdown (Hossz): {int(max_dd_duration)} nap")
+print(f"Napi 95% VaR: {var_95 * 100:.2f}%")
+print(f"Napi 95% CVaR: {cvar_95 * 100:.2f}%")
+print(f"Stratégia Overall Béta (SPY): {overall_beta:.2f}")
 
 # 5. Visualization
 plt.figure(figsize=(12, 6))
