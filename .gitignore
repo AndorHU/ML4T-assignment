@@ -1,2 +1,6 @@
-ml_features_dataset.parquet
-market_data.csv
+.venv/
+__pycache__/
+*.parquet
+.idea/
+.vscode/
+*.png
